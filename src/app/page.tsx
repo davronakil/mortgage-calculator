@@ -18,6 +18,9 @@ import { calculateMortgage } from '../utils/mortgageCalculator';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale);
 
+const DEFAULT_HOME_PRICE = 475000;
+const DEFAULT_DOWN_PAYMENT_PERCENTAGE = 0.20; // 20%
+
 const schema = z.object({
   homePrice: z.number().min(1, "Home price is required"),
   downPayment: z.number().min(0, "Down payment must be positive"),
@@ -122,19 +125,30 @@ const InputField = ({ label, register, name, error, placeholder }: InputFieldPro
 export default function Home() {
   const [calculation, setCalculation] = useState<MortgageCalculation | null>(null);
 
+  const calculatePMIRate = (downPaymentPercentage: number): number => {
+    if (downPaymentPercentage >= 0.20) return 0; // No PMI if 20% or more down
+    if (downPaymentPercentage >= 0.15) return 0.375;
+    if (downPaymentPercentage >= 0.10) return 0.50;
+    if (downPaymentPercentage >= 0.05) return 0.75;
+    return 0.85; // Less than 5% down
+  };
+
+  const defaultDownPayment = DEFAULT_HOME_PRICE * DEFAULT_DOWN_PAYMENT_PERCENTAGE;
+  const defaultPMIRate = calculatePMIRate(DEFAULT_DOWN_PAYMENT_PERCENTAGE);
+
   const { register, handleSubmit, formState: { errors } } = useForm<MortgageInputs>({
     resolver: zodResolver(schema),
     defaultValues: {
-      homePrice: 300000,
-      downPayment: 60000,
+      homePrice: DEFAULT_HOME_PRICE,
+      downPayment: defaultDownPayment,
       loanTerm: 30,
-      interestRate: 3.5,
-      propertyTax: 1.2,
-      homeInsurance: 1200,
-      pmi: 0.5,
-      hoa: 250,
-      utilities: 200,
-      maintenance: 200,
+      interestRate: 7.0,
+      propertyTax: 1.7,
+      homeInsurance: 3800,
+      pmi: defaultPMIRate,
+      hoa: 45,
+      utilities: 0,
+      maintenance: 0,
     },
   });
 
@@ -154,8 +168,11 @@ export default function Home() {
     <main className="min-h-screen p-4 md:p-8 bg-gray-50">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl md:text-4xl font-bold text-center mb-8 text-gray-900">
-          Mortgage Calculator
+          Dallas Mortgage Calculator
         </h1>
+        <p className="text-center text-gray-700 mb-8">
+          Pre-configured with Dallas-area typical rates and costs
+        </p>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-6 rounded-lg shadow-lg">
