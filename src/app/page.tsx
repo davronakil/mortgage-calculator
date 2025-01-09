@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, UseFormRegister, FieldError } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 // import { Doughnut } from 'react-chartjs-2';
@@ -33,9 +33,9 @@ const schema = z.object({
 
 interface InputFieldProps {
   label: string;
-  register: any;
-  name: string;
-  error: any;
+  register: UseFormRegister<MortgageInputs>;
+  name: keyof MortgageInputs;
+  error: FieldError | undefined;
   placeholder: string;
 }
 
@@ -96,7 +96,7 @@ const InputField = ({ label, register, name, error, placeholder }: InputFieldPro
         onFocus={(e) => e.target.select()}
         onChange={formatValue}
         {...register(name, {
-          setValueAs: (value: any) => {
+          setValueAs: (value: string | number): number => {
             if (!value) return 0;
             if (typeof value === 'number') return value;
             if (typeof value === 'string') {

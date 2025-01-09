@@ -1,9 +1,9 @@
-import { ReactNode } from 'react';
+// import { ReactNode } from 'react'
 
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      [elemName: string]: any;
+      [elemName: string]: Record<string, unknown>;
     }
   }
 }
@@ -13,3 +13,5 @@ declare module 'react' {
     children?: ReactNode;
   }
 }
+
+export {};
