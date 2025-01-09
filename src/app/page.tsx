@@ -87,6 +87,23 @@ const InputField = ({ label, register, name, error, placeholder }: InputFieldPro
     }
   };
 
+  const registerOptions = {
+    ...register(name, {
+      setValueAs: (value: string | number): number => {
+        if (!value) return 0;
+        if (typeof value === 'number') return value;
+        if (typeof value === 'string') {
+          return parseFloat(value.replace(/,/g, '')) || 0;
+        }
+        return 0;
+      }
+    }),
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+      formatValue(e);
+      registerOptions.onChange(e); // Call the original onChange from register
+    }
+  };
+
   return (
     <div className="flex flex-col space-y-1">
       <label className="text-sm font-medium text-gray-800">{label}</label>
@@ -94,17 +111,7 @@ const InputField = ({ label, register, name, error, placeholder }: InputFieldPro
         type="text"
         placeholder={placeholder}
         onFocus={(e) => e.target.select()}
-        onChange={formatValue}
-        {...register(name, {
-          setValueAs: (value: string | number): number => {
-            if (!value) return 0;
-            if (typeof value === 'number') return value;
-            if (typeof value === 'string') {
-              return parseFloat(value.replace(/,/g, '')) || 0;
-            }
-            return 0;
-          }
-        })}
+        {...registerOptions}
         className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
       />
       {error && <span className="text-red-500 text-xs">{error.message}</span>}
