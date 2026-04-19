@@ -1,4 +1,4 @@
-# Davron's real estate calculator
+# Dallas Real Estate Calculator
 
 Planning suite for residential buyers, commercial deal analysis, sell-vs-hold decisions, and business idea projections.
 

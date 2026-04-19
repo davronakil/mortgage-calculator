@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`Davron's real estate calculator` is a single-page planning application that combines:
+`Dallas Real Estate Calculator` is a single-page planning application that combines:
 
 - Residential mortgage planning
 - Commercial deal underwriting snapshots

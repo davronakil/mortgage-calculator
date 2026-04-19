@@ -388,7 +388,7 @@ export default function Home() {
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-blue-200">
             North Texas Planning Suite
           </p>
-          <h1 className="mt-2 text-3xl font-bold md:text-5xl">Davron&apos;s real estate calculator</h1>
+          <h1 className="mt-2 text-3xl font-bold md:text-5xl">Dallas Real Estate Calculator</h1>
           <p className="mt-3 max-w-4xl text-sm text-slate-200 md:text-base">
             One place to plan home buying, analyze concessions, compare counties, model commercial deals, and
             pressure-test sell/hold or business ideas.

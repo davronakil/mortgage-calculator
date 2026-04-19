@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `Davron's real estate calculator`.
+Thanks for helping improve `Dallas Real Estate Calculator`.
 
 ## Development workflow
 

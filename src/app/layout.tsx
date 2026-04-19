@@ -4,8 +4,8 @@ import { Inter } from 'next/font/google'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata = {
-  title: 'Mortgage Calculator',
-  description: 'Advanced mortgage calculator with detailed cost breakdown',
+  title: 'Dallas Real Estate Calculator',
+  description: 'Residential, commercial, and planning tools for Dallas-area real estate decisions.',
 }
 
 export default function RootLayout({
