@@ -165,6 +165,7 @@ const DALLAS_AREA_COUNTIES: Record<string, CountyProfile> = {
 const RESIDENTIAL_PRESETS_STORAGE_KEY = 'dallas-real-estate-calculator:residential-presets';
 const PAYDOWN_SCENARIO_EXTRA_PAYMENTS = [0, 100, 250, 500, 1000];
 const BASE_MARKET_RATE = 6.37;
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '0.2.0';
 
 const LOAN_PROGRAM_PRESETS: Record<LoanProgramKey, LoanProgramPreset> = {
   conventional_20: {
@@ -1660,6 +1661,25 @@ export default function Home() {
             </div>
           </section>
         ) : null}
+
+        <footer className="rounded-3xl border border-slate-200 bg-white px-6 py-5 text-sm text-slate-600 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p>
+              Credit:{' '}
+              <a
+                href="https://akilrealestate.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-blue-700 hover:text-blue-800"
+              >
+                Akil Real Estate
+              </a>
+            </p>
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Dallas Real Estate Calculator v{APP_VERSION}
+            </p>
+          </div>
+        </footer>
       </div>
     </main>
   );

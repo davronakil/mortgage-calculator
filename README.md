@@ -40,6 +40,8 @@ Open `http://localhost:3000`.
 - `docs/CALCULATOR_REFERENCE.md` - formulas, metrics, and feature behavior by tab
 - `docs/DATA_ASSUMPTIONS.md` - county defaults and how to update assumptions safely
 - `docs/MAINTENANCE_RUNBOOK.md` - deployment, troubleshooting, and release checklist
+- `docs/VERSIONING.md` - semantic versioning process and release sequencing
+- `CHANGELOG.md` - chronological release notes
 
 ## Current project layout
 
