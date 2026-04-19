@@ -1,14 +1,32 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Doughnut } from 'react-chartjs-2';
-import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Doughnut, Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  ArcElement,
+  Tooltip,
+  Legend,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+} from 'chart.js';
 import { MortgageInputs } from '../types/mortgage';
 import { calculateMortgage } from '../utils/mortgageCalculator';
 
-ChartJS.register(ArcElement, Tooltip, Legend);
+ChartJS.register(
+  ArcElement,
+  Tooltip,
+  Legend,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement
+);
 
 type AppTab = 'residential' | 'commercial' | 'other';
+type ValueMode = 'amount' | 'percent';
 
 interface CountyProfile {
   name: string;
@@ -26,6 +44,20 @@ interface ResidentialInputs extends MortgageInputs {
   sellerConcessionAmount: number;
   priceReductionComparisonAmount: number;
   autoPMI: boolean;
+}
+
+interface ResidentialPreset {
+  id: string;
+  name: string;
+  countyKey: string;
+  createdAt: string;
+  data: ResidentialInputs;
+}
+
+interface AmortizationPoint {
+  year: number;
+  remainingBalance: number;
+  cumulativeInterest: number;
 }
 
 interface CommercialInputs {
@@ -110,6 +142,9 @@ const DALLAS_AREA_COUNTIES: Record<string, CountyProfile> = {
   },
 };
 
+const RESIDENTIAL_PRESETS_STORAGE_KEY = 'dallas-real-estate-calculator:residential-presets';
+const PAYDOWN_SCENARIO_EXTRA_PAYMENTS = [0, 100, 250, 500, 1000];
+
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -128,6 +163,88 @@ function calculateSuggestedPMI(downPaymentPercent: number) {
   if (downPaymentPercent >= 0.1) return 0.5;
   if (downPaymentPercent >= 0.05) return 0.75;
   return 0.9;
+}
+
+function buildAmortizationSchedule(inputs: MortgageInputs, extraPrincipalPerMonth: number): AmortizationPoint[] {
+  const homePrice = Math.max(inputs.homePrice, 0);
+  const downPayment = Math.min(Math.max(inputs.downPayment, 0), homePrice);
+  const loanAmount = Math.max(homePrice - downPayment, 0);
+  const monthlyRate = inputs.interestRate / 100 / 12;
+  const maxMonths = Math.max(inputs.loanTerm * 12, 1);
+  const baseCalc = calculateMortgage({
+    ...inputs,
+    monthlyExtraPayment: 0,
+  });
+  const monthlyPayment = baseCalc.monthlyPrincipalAndInterest + Math.max(extraPrincipalPerMonth, 0);
+
+  let balance = loanAmount;
+  let month = 0;
+  let cumulativeInterest = 0;
+  const points: AmortizationPoint[] = [{ year: 0, remainingBalance: loanAmount, cumulativeInterest: 0 }];
+
+  while (balance > 0.01 && month < maxMonths * 2) {
+    const interest = monthlyRate > 0 ? balance * monthlyRate : 0;
+    const principal = Math.min(monthlyPayment - interest, balance);
+
+    if (principal <= 0) {
+      break;
+    }
+
+    balance -= principal;
+    cumulativeInterest += interest;
+    month += 1;
+
+    if (month % 12 === 0 || balance <= 0.01) {
+      points.push({
+        year: month / 12,
+        remainingBalance: Math.max(balance, 0),
+        cumulativeInterest,
+      });
+    }
+  }
+
+  return points;
+}
+
+function solveMaxAffordableHomePrice(
+  template: ResidentialInputs,
+  targetMonthlyMortgagePayment: number
+): number {
+  const target = Math.max(targetMonthlyMortgagePayment, 0);
+  const downPaymentRatio =
+    template.homePrice > 0 ? Math.min(Math.max(template.downPayment / template.homePrice, 0), 0.95) : 0.2;
+
+  const estimatePaymentAtPrice = (price: number) => {
+    const downPayment = price * downPaymentRatio;
+    const pmiRate = template.autoPMI ? calculateSuggestedPMI(downPaymentRatio) : template.pmiRate;
+    const result = calculateMortgage({
+      ...template,
+      homePrice: price,
+      downPayment,
+      pmiRate,
+      monthlyExtraPayment: 0,
+    });
+    return result.monthlyMortgagePayment;
+  };
+
+  let low = 10000;
+  let high = 2500000;
+
+  while (estimatePaymentAtPrice(high) < target && high < 10000000) {
+    high *= 1.4;
+  }
+
+  for (let i = 0; i < 45; i += 1) {
+    const mid = (low + high) / 2;
+    const payment = estimatePaymentAtPrice(mid);
+    if (payment > target) {
+      high = mid;
+    } else {
+      low = mid;
+    }
+  }
+
+  return low;
 }
 
 function buildResidentialDefaults(county: CountyProfile): ResidentialInputs {
@@ -178,12 +295,78 @@ function NumberInput({ label, value, onChange, hint, step = 1 }: NumberInputProp
   );
 }
 
+interface AmountOrPercentInputProps {
+  label: string;
+  amountValue: number;
+  mode: ValueMode;
+  percentValue: number;
+  onModeChange: (mode: ValueMode) => void;
+  onAmountChange: (value: number) => void;
+  onPercentChange: (value: number) => void;
+  hint?: string;
+}
+
+function AmountOrPercentInput({
+  label,
+  amountValue,
+  mode,
+  percentValue,
+  onModeChange,
+  onAmountChange,
+  onPercentChange,
+  hint,
+}: AmountOrPercentInputProps) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-slate-800">{label}</span>
+        <select
+          value={mode}
+          onChange={(event) => onModeChange(event.target.value as ValueMode)}
+          className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-800"
+        >
+          <option value="amount">$ amount</option>
+          <option value="percent">% of home price</option>
+        </select>
+      </div>
+      <input
+        type="number"
+        step={mode === 'percent' ? 0.1 : 100}
+        value={mode === 'percent' ? percentValue : amountValue}
+        onChange={(event) => {
+          const next = Number(event.target.value) || 0;
+          if (mode === 'percent') {
+            onPercentChange(next);
+          } else {
+            onAmountChange(next);
+          }
+        }}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+      />
+      <p className="mt-1 text-xs text-slate-500">
+        {mode === 'percent'
+          ? `${percentValue.toFixed(2)}% of price = ${formatCurrency(amountValue)}`
+          : `${formatCurrency(amountValue)} (${percentValue.toFixed(2)}% of price)`}
+      </p>
+      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    </div>
+  );
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<AppTab>('residential');
   const [selectedCounty, setSelectedCounty] = useState('collin');
   const [residentialInputs, setResidentialInputs] = useState<ResidentialInputs>(
     buildResidentialDefaults(DALLAS_AREA_COUNTIES.collin)
   );
+  const [downPaymentMode, setDownPaymentMode] = useState<ValueMode>('amount');
+  const [sellerConcessionMode, setSellerConcessionMode] = useState<ValueMode>('amount');
+  const [priceReductionMode, setPriceReductionMode] = useState<ValueMode>('amount');
+  const [targetBackEndDti, setTargetBackEndDti] = useState(43);
+  const [targetMortgagePaymentBudget, setTargetMortgagePaymentBudget] = useState(3500);
+  const [presetName, setPresetName] = useState('');
+  const [residentialPresets, setResidentialPresets] = useState<ResidentialPreset[]>([]);
+  const presetImportInputRef = useRef<HTMLInputElement | null>(null);
   const [commercialInputs, setCommercialInputs] = useState<CommercialInputs>({
     purchasePrice: 1200000,
     downPaymentPercent: 25,
@@ -211,7 +394,127 @@ export default function Home() {
     monthlyDebtService: 1800,
   });
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(RESIDENTIAL_PRESETS_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw) as ResidentialPreset[];
+      if (Array.isArray(parsed)) {
+        setResidentialPresets(parsed);
+      }
+    } catch {
+      setResidentialPresets([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(RESIDENTIAL_PRESETS_STORAGE_KEY, JSON.stringify(residentialPresets));
+  }, [residentialPresets]);
+
   const county = DALLAS_AREA_COUNTIES[selectedCounty];
+  const homePrice = Math.max(residentialInputs.homePrice, 0);
+  const downPaymentPercentValue = homePrice > 0 ? (residentialInputs.downPayment / homePrice) * 100 : 0;
+  const sellerConcessionPercentValue =
+    homePrice > 0 ? (residentialInputs.sellerConcessionAmount / homePrice) * 100 : 0;
+  const priceReductionPercentValue =
+    homePrice > 0 ? (residentialInputs.priceReductionComparisonAmount / homePrice) * 100 : 0;
+
+  const setDownPaymentFromPercent = (percent: number) => {
+    const normalizedPercent = Math.max(percent, 0);
+    setResidentialInputs((prev) => ({
+      ...prev,
+      downPayment: Math.max((prev.homePrice * normalizedPercent) / 100, 0),
+    }));
+  };
+
+  const setSellerConcessionFromPercent = (percent: number) => {
+    const normalizedPercent = Math.max(percent, 0);
+    setResidentialInputs((prev) => ({
+      ...prev,
+      sellerConcessionAmount: Math.max((prev.homePrice * normalizedPercent) / 100, 0),
+    }));
+  };
+
+  const setPriceReductionFromPercent = (percent: number) => {
+    const normalizedPercent = Math.max(percent, 0);
+    setResidentialInputs((prev) => ({
+      ...prev,
+      priceReductionComparisonAmount: Math.max((prev.homePrice * normalizedPercent) / 100, 0),
+    }));
+  };
+
+  const saveCurrentPreset = () => {
+    const name = presetName.trim();
+    if (!name) {
+      return;
+    }
+
+    const nextPreset: ResidentialPreset = {
+      id: `${Date.now()}`,
+      name,
+      countyKey: selectedCounty,
+      createdAt: new Date().toISOString(),
+      data: residentialInputs,
+    };
+
+    setResidentialPresets((prev) => [nextPreset, ...prev].slice(0, 20));
+    setPresetName('');
+  };
+
+  const loadPreset = (preset: ResidentialPreset) => {
+    setSelectedCounty(preset.countyKey);
+    setResidentialInputs(preset.data);
+  };
+
+  const deletePreset = (presetId: string) => {
+    setResidentialPresets((prev) => prev.filter((preset) => preset.id !== presetId));
+  };
+
+  const exportCurrentPreset = () => {
+    const payload = {
+      app: 'Dallas Real Estate Calculator',
+      exportedAt: new Date().toISOString(),
+      county: selectedCounty,
+      residentialInputs,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `dallas-real-estate-preset-${Date.now()}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importPresetFromFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as {
+        county?: string;
+        residentialInputs?: ResidentialInputs;
+      };
+      if (parsed.county && DALLAS_AREA_COUNTIES[parsed.county]) {
+        setSelectedCounty(parsed.county);
+      }
+      if (parsed.residentialInputs) {
+        setResidentialInputs(parsed.residentialInputs);
+      }
+    } catch {
+      // no-op for malformed file
+    } finally {
+      event.target.value = '';
+    }
+  };
 
   const residentialCalc = useMemo(() => {
     const downPaymentPercent =
@@ -264,6 +567,101 @@ export default function Home() {
       breakevenMonths,
     };
   }, [residentialCalc, residentialInputs]);
+
+  const amortizationSchedules = useMemo(() => {
+    const baseInputs: MortgageInputs = {
+      homePrice: residentialInputs.homePrice,
+      downPayment: residentialInputs.downPayment,
+      loanTerm: residentialInputs.loanTerm,
+      interestRate: residentialInputs.interestRate,
+      propertyTaxRate: residentialInputs.propertyTaxRate,
+      annualHomeInsurance: residentialInputs.annualHomeInsurance,
+      pmiRate: residentialInputs.autoPMI
+        ? calculateSuggestedPMI(
+            residentialInputs.homePrice > 0
+              ? residentialInputs.downPayment / residentialInputs.homePrice
+              : 0
+          )
+        : residentialInputs.pmiRate,
+      monthlyHOA: residentialInputs.monthlyHOA,
+      monthlyUtilities: residentialInputs.monthlyUtilities,
+      maintenanceRate: residentialInputs.maintenanceRate,
+      monthlyExtraPayment: 0,
+      closingCostRate: residentialInputs.closingCostRate,
+      annualIncome: residentialInputs.annualIncome,
+      monthlyDebts: residentialInputs.monthlyDebts,
+    };
+
+    const base = buildAmortizationSchedule(baseInputs, 0);
+    const accelerated = buildAmortizationSchedule(baseInputs, residentialInputs.monthlyExtraPayment);
+    return { base, accelerated };
+  }, [residentialInputs]);
+
+  const amortizationChartData = useMemo(
+    () => ({
+      labels: amortizationSchedules.base.map((point) => point.year.toFixed(0)),
+      datasets: [
+        {
+          label: 'Remaining balance (no extra)',
+          data: amortizationSchedules.base.map((point) => point.remainingBalance),
+          borderColor: '#475569',
+          backgroundColor: '#47556922',
+          tension: 0.15,
+        },
+        {
+          label: `Remaining balance (+${formatCurrency(residentialInputs.monthlyExtraPayment)}/mo)`,
+          data: amortizationSchedules.accelerated.map((point) => point.remainingBalance),
+          borderColor: '#2563eb',
+          backgroundColor: '#2563eb22',
+          tension: 0.15,
+        },
+      ],
+    }),
+    [amortizationSchedules, residentialInputs.monthlyExtraPayment]
+  );
+
+  const paydownScenarios = useMemo(() => {
+    return PAYDOWN_SCENARIO_EXTRA_PAYMENTS.map((extraPayment) => {
+      const scenario = calculateMortgage({
+        ...residentialInputs,
+        pmiRate: residentialInputs.autoPMI
+          ? calculateSuggestedPMI(
+              residentialInputs.homePrice > 0
+                ? residentialInputs.downPayment / residentialInputs.homePrice
+                : 0
+            )
+          : residentialInputs.pmiRate,
+        monthlyExtraPayment: extraPayment,
+      });
+
+      return {
+        extraPayment,
+        payoffMonths: scenario.payoffMonthsWithExtraPayments,
+        yearsSaved: scenario.yearsSavedWithExtraPayments,
+        interestSavings: scenario.interestSavingsFromExtraPayments,
+      };
+    });
+  }, [residentialInputs]);
+
+  const incomePlanning = useMemo(() => {
+    const targetRatio = Math.max(targetBackEndDti, 1) / 100;
+    const requiredAnnualIncome =
+      ((residentialCalc.monthlyMortgagePayment + residentialInputs.monthlyDebts) / targetRatio) * 12;
+    const maxHomePriceAtBudget = solveMaxAffordableHomePrice(
+      residentialInputs,
+      targetMortgagePaymentBudget
+    );
+
+    return {
+      requiredAnnualIncome,
+      maxHomePriceAtBudget,
+    };
+  }, [
+    residentialCalc.monthlyMortgagePayment,
+    residentialInputs,
+    targetBackEndDti,
+    targetMortgagePaymentBudget,
+  ]);
 
   const commercialDebtCalculation = useMemo(() => {
     const downPayment = commercialInputs.purchasePrice * (commercialInputs.downPaymentPercent / 100);
@@ -441,10 +839,80 @@ export default function Home() {
                 >
                   Apply county defaults
                 </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+                  onClick={exportCurrentPreset}
+                >
+                  Export current preset
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-300"
+                  onClick={() => presetImportInputRef.current?.click()}
+                >
+                  Import preset JSON
+                </button>
+                <input
+                  ref={presetImportInputRef}
+                  type="file"
+                  accept="application/json"
+                  onChange={importPresetFromFile}
+                  className="hidden"
+                />
               </div>
               <p className="mt-2 text-sm text-slate-600">
                 County presets include typical home price, tax rate, insurance, utilities, HOA, and income context.
               </p>
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">Saved presets</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    placeholder="Preset name (ex: Aggressive payoff)"
+                    className="min-w-64 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveCurrentPreset}
+                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                  >
+                    Save preset
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {residentialPresets.length === 0 ? (
+                    <p className="text-xs text-slate-500">No saved presets yet.</p>
+                  ) : (
+                    residentialPresets.map((preset) => (
+                      <div
+                        key={preset.id}
+                        className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => loadPreset(preset)}
+                          className="text-sm font-semibold text-blue-700 hover:text-blue-800"
+                        >
+                          {preset.name}
+                        </button>
+                        <span className="text-xs text-slate-500">
+                          {DALLAS_AREA_COUNTIES[preset.countyKey]?.name ?? 'Custom county'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => deletePreset(preset.id)}
+                          className="text-xs font-medium text-slate-500 hover:text-red-600"
+                        >
+                          remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
 
               <div className="mt-6 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
                 <div className="space-y-4 rounded-2xl bg-slate-50 p-4">
@@ -454,10 +922,17 @@ export default function Home() {
                       value={residentialInputs.homePrice}
                       onChange={(value) => setResidentialInputs((prev) => ({ ...prev, homePrice: value }))}
                     />
-                    <NumberInput
+                    <AmountOrPercentInput
                       label="Down payment"
-                      value={residentialInputs.downPayment}
-                      onChange={(value) => setResidentialInputs((prev) => ({ ...prev, downPayment: value }))}
+                      amountValue={residentialInputs.downPayment}
+                      mode={downPaymentMode}
+                      percentValue={downPaymentPercentValue}
+                      onModeChange={setDownPaymentMode}
+                      onAmountChange={(value) =>
+                        setResidentialInputs((prev) => ({ ...prev, downPayment: Math.max(value, 0) }))
+                      }
+                      onPercentChange={setDownPaymentFromPercent}
+                      hint="Switch between fixed cash amount and % of price."
                     />
                     <NumberInput
                       label="Loan term (years)"
@@ -627,19 +1102,30 @@ export default function Home() {
                 purchase price.
               </p>
               <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <NumberInput
-                  label="Seller concession amount"
-                  value={residentialInputs.sellerConcessionAmount}
-                  onChange={(value) =>
-                    setResidentialInputs((prev) => ({ ...prev, sellerConcessionAmount: value }))
+                <AmountOrPercentInput
+                  label="Seller concession"
+                  amountValue={residentialInputs.sellerConcessionAmount}
+                  mode={sellerConcessionMode}
+                  percentValue={sellerConcessionPercentValue}
+                  onModeChange={setSellerConcessionMode}
+                  onAmountChange={(value) =>
+                    setResidentialInputs((prev) => ({ ...prev, sellerConcessionAmount: Math.max(value, 0) }))
                   }
+                  onPercentChange={setSellerConcessionFromPercent}
                 />
-                <NumberInput
+                <AmountOrPercentInput
                   label="Price-reduction comparison"
-                  value={residentialInputs.priceReductionComparisonAmount}
-                  onChange={(value) =>
-                    setResidentialInputs((prev) => ({ ...prev, priceReductionComparisonAmount: value }))
+                  amountValue={residentialInputs.priceReductionComparisonAmount}
+                  mode={priceReductionMode}
+                  percentValue={priceReductionPercentValue}
+                  onModeChange={setPriceReductionMode}
+                  onAmountChange={(value) =>
+                    setResidentialInputs((prev) => ({
+                      ...prev,
+                      priceReductionComparisonAmount: Math.max(value, 0),
+                    }))
                   }
+                  onPercentChange={setPriceReductionFromPercent}
                 />
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="text-sm text-slate-600">Concession usable at closing</p>
@@ -655,6 +1141,119 @@ export default function Home() {
                   </p>
                   <p className="text-xs text-slate-500">
                     Breakeven: {concessionAnalysis.breakevenMonths > 0 ? `${concessionAnalysis.breakevenMonths.toFixed(1)} months` : 'N/A'}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-slate-600">
+                If you plan to refinance or move before{' '}
+                {concessionAnalysis.breakevenMonths > 0
+                  ? `${concessionAnalysis.breakevenMonths.toFixed(0)} months`
+                  : 'the breakeven point'}
+                , concessions may be more valuable. If you expect to keep the mortgage longer, a lower price often
+                wins on total cost.
+              </p>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-3xl bg-white p-6 shadow-lg">
+                <h3 className="text-xl font-semibold text-slate-900">Amortization and payoff path</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Remaining balance trajectory with and without extra principal payments.
+                </p>
+                <div className="mt-4 h-[320px]">
+                  <Line
+                    data={amortizationChartData}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      scales: {
+                        y: {
+                          ticks: {
+                            callback: (value) => formatCurrency(Number(value)),
+                          },
+                        },
+                        x: {
+                          title: {
+                            display: true,
+                            text: 'Year',
+                          },
+                        },
+                      },
+                      plugins: {
+                        legend: {
+                          position: 'bottom',
+                        },
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-white p-6 shadow-lg">
+                <h3 className="text-xl font-semibold text-slate-900">Suggested payout schedules</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Test common extra-payment plans and compare time and interest savings.
+                </p>
+                <div className="mt-4 space-y-2">
+                  {paydownScenarios.map((scenario) => (
+                    <div
+                      key={scenario.extraPayment}
+                      className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">
+                          +{formatCurrency(scenario.extraPayment)}/mo
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          Payoff in {(scenario.payoffMonths / 12).toFixed(1)} years
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-emerald-700">
+                          {formatCurrency(scenario.interestSavings)} saved
+                        </p>
+                        <p className="text-xs text-slate-500">{scenario.yearsSaved.toFixed(1)} years faster</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-white p-6 shadow-lg">
+              <h3 className="text-xl font-semibold text-slate-900">Target income and budget planner</h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Set your underwriting target ratio and payment budget to estimate required income and max price.
+              </p>
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <NumberInput
+                  label="Target back-end DTI (%)"
+                  value={targetBackEndDti}
+                  step={0.1}
+                  onChange={setTargetBackEndDti}
+                  hint="Conventional targets often center around 43%, with exceptions."
+                />
+                <NumberInput
+                  label="Target mortgage payment budget / month"
+                  value={targetMortgagePaymentBudget}
+                  onChange={setTargetMortgagePaymentBudget}
+                />
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-sm text-slate-600">Income needed for current scenario</p>
+                  <p className="mt-1 text-2xl font-semibold text-slate-950">
+                    {formatCurrency(incomePlanning.requiredAnnualIncome)}/yr
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Based on current payment + debts at {targetBackEndDti.toFixed(1)}% back-end DTI.
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-4">
+                  <p className="text-sm text-slate-600">Estimated max home price at budget</p>
+                  <p className="mt-1 text-2xl font-semibold text-blue-700">
+                    {formatCurrency(incomePlanning.maxHomePriceAtBudget)}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Uses your current rate/term/down-payment ratio assumptions.
                   </p>
                 </div>
               </div>
