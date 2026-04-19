@@ -27,6 +27,13 @@ ChartJS.register(
 
 type AppTab = 'residential' | 'commercial' | 'other';
 type ValueMode = 'amount' | 'percent';
+type LoanProgramKey =
+  | 'conventional_20'
+  | 'conventional_5'
+  | 'fha_3_5'
+  | 'va_0'
+  | 'physician_0'
+  | 'jumbo_15';
 
 interface CountyProfile {
   name: string;
@@ -58,6 +65,19 @@ interface AmortizationPoint {
   year: number;
   remainingBalance: number;
   cumulativeInterest: number;
+}
+
+interface LoanProgramPreset {
+  name: string;
+  description: string;
+  downPaymentPercent: number;
+  autoPMI: boolean;
+  pmiRate: number;
+  interestRateAdjustment: number;
+  closingCostRate: number;
+  loanTerm: number;
+  suggestedSellerConcessionPercent: number;
+  notes: string;
 }
 
 interface CommercialInputs {
@@ -144,6 +164,82 @@ const DALLAS_AREA_COUNTIES: Record<string, CountyProfile> = {
 
 const RESIDENTIAL_PRESETS_STORAGE_KEY = 'dallas-real-estate-calculator:residential-presets';
 const PAYDOWN_SCENARIO_EXTRA_PAYMENTS = [0, 100, 250, 500, 1000];
+const BASE_MARKET_RATE = 6.37;
+
+const LOAN_PROGRAM_PRESETS: Record<LoanProgramKey, LoanProgramPreset> = {
+  conventional_20: {
+    name: 'Conventional 20% down',
+    description: 'Traditional option with no PMI and stronger pricing for many borrowers.',
+    downPaymentPercent: 20,
+    autoPMI: true,
+    pmiRate: 0,
+    interestRateAdjustment: -0.1,
+    closingCostRate: 2.8,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 1,
+    notes: 'No PMI at 20% down. Good baseline for comparing other loan programs.',
+  },
+  conventional_5: {
+    name: 'Conventional 5% down',
+    description: 'Low-down-payment conventional setup with PMI and flexible occupancy options.',
+    downPaymentPercent: 5,
+    autoPMI: true,
+    pmiRate: 0.75,
+    interestRateAdjustment: 0,
+    closingCostRate: 3,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 2,
+    notes: 'PMI is estimated; actual MI varies by credit score, DTI, and loan-level pricing.',
+  },
+  fha_3_5: {
+    name: 'FHA 3.5% down',
+    description: 'Common first-time buyer path with upfront/annual mortgage insurance.',
+    downPaymentPercent: 3.5,
+    autoPMI: false,
+    pmiRate: 0.55,
+    interestRateAdjustment: -0.2,
+    closingCostRate: 3.2,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 3,
+    notes: 'PMI field approximates annual FHA MIP. Upfront MIP/funding details are not fully modeled.',
+  },
+  va_0: {
+    name: 'VA 0% down',
+    description: 'Eligible veterans/service members can often finance with no down payment and no PMI.',
+    downPaymentPercent: 0,
+    autoPMI: false,
+    pmiRate: 0,
+    interestRateAdjustment: -0.25,
+    closingCostRate: 2.5,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 2,
+    notes: 'VA funding fee and exemption scenarios are not fully modeled; use concessions to test cash-to-close strategies.',
+  },
+  physician_0: {
+    name: 'Physician loan (0-5% down)',
+    description: 'Specialized program with low down payment and no PMI for qualified medical professionals.',
+    downPaymentPercent: 0,
+    autoPMI: false,
+    pmiRate: 0,
+    interestRateAdjustment: 0.25,
+    closingCostRate: 3,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 2,
+    notes: 'Program rules differ by lender, specialty, and loan size. Validate reserves and deferred student loan treatment.',
+  },
+  jumbo_15: {
+    name: 'Jumbo 15% down',
+    description: 'Higher-balance scenario with stricter reserve/income standards.',
+    downPaymentPercent: 15,
+    autoPMI: false,
+    pmiRate: 0,
+    interestRateAdjustment: 0.35,
+    closingCostRate: 3,
+    loanTerm: 30,
+    suggestedSellerConcessionPercent: 1,
+    notes: 'Jumbo guidelines vary materially by lender and can impact qualifying income significantly.',
+  },
+};
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('en-US', {
@@ -356,6 +452,7 @@ function AmountOrPercentInput({
 export default function Home() {
   const [activeTab, setActiveTab] = useState<AppTab>('residential');
   const [selectedCounty, setSelectedCounty] = useState('collin');
+  const [selectedLoanProgram, setSelectedLoanProgram] = useState<LoanProgramKey>('conventional_20');
   const [residentialInputs, setResidentialInputs] = useState<ResidentialInputs>(
     buildResidentialDefaults(DALLAS_AREA_COUNTIES.collin)
   );
@@ -414,6 +511,7 @@ export default function Home() {
   }, [residentialPresets]);
 
   const county = DALLAS_AREA_COUNTIES[selectedCounty];
+  const selectedLoanPreset = LOAN_PROGRAM_PRESETS[selectedLoanProgram];
   const homePrice = Math.max(residentialInputs.homePrice, 0);
   const downPaymentPercentValue = homePrice > 0 ? (residentialInputs.downPayment / homePrice) * 100 : 0;
   const sellerConcessionPercentValue =
@@ -442,6 +540,24 @@ export default function Home() {
     setResidentialInputs((prev) => ({
       ...prev,
       priceReductionComparisonAmount: Math.max((prev.homePrice * normalizedPercent) / 100, 0),
+    }));
+  };
+
+  const applyLoanProgramPreset = (loanProgramKey: LoanProgramKey) => {
+    const program = LOAN_PROGRAM_PRESETS[loanProgramKey];
+    setSelectedLoanProgram(loanProgramKey);
+    setDownPaymentMode('percent');
+    setSellerConcessionMode('percent');
+
+    setResidentialInputs((prev) => ({
+      ...prev,
+      downPayment: (prev.homePrice * program.downPaymentPercent) / 100,
+      loanTerm: program.loanTerm,
+      interestRate: Math.max(BASE_MARKET_RATE + program.interestRateAdjustment, 0),
+      autoPMI: program.autoPMI,
+      pmiRate: program.pmiRate,
+      closingCostRate: program.closingCostRate,
+      sellerConcessionAmount: (prev.homePrice * program.suggestedSellerConcessionPercent) / 100,
     }));
   };
 
@@ -864,6 +980,43 @@ export default function Home() {
               <p className="mt-2 text-sm text-slate-600">
                 County presets include typical home price, tax rate, insurance, utilities, HOA, and income context.
               </p>
+              <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-slate-900">Loan program presets</p>
+                  <select
+                    value={selectedLoanProgram}
+                    onChange={(event) => setSelectedLoanProgram(event.target.value as LoanProgramKey)}
+                    className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                  >
+                    {Object.entries(LOAN_PROGRAM_PRESETS).map(([key, program]) => (
+                      <option key={key} value={key}>
+                        {program.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => applyLoanProgramPreset(selectedLoanProgram)}
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+                  >
+                    Apply loan preset
+                  </button>
+                </div>
+                <p className="mt-2 text-sm text-slate-700">{selectedLoanPreset.description}</p>
+                <p className="mt-1 text-xs text-slate-600">{selectedLoanPreset.notes}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(Object.keys(LOAN_PROGRAM_PRESETS) as LoanProgramKey[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => applyLoanProgramPreset(key)}
+                      className="rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 ring-1 ring-slate-200 hover:bg-slate-100"
+                    >
+                      {LOAN_PROGRAM_PRESETS[key].name}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-semibold text-slate-900">Saved presets</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1021,13 +1174,14 @@ export default function Home() {
                     />
                   </div>
                   <div className="flex flex-wrap items-center gap-4 text-sm">
-                    <label className="flex items-center gap-2">
+                    <label className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 font-medium text-slate-800 ring-1 ring-slate-200">
                       <input
                         type="checkbox"
                         checked={residentialInputs.autoPMI}
                         onChange={(event) =>
                           setResidentialInputs((prev) => ({ ...prev, autoPMI: event.target.checked }))
                         }
+                        className="h-4 w-4 accent-blue-600"
                       />
                       Auto-suggest PMI
                     </label>
